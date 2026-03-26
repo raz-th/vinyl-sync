@@ -1,0 +1,29 @@
+name: Sync Discogs to Firebase
+
+on:
+  schedule:
+    - cron: '0 3 */2 * *'  # la fiecare 2 zile ora 3:00
+  workflow_dispatch:        # buton manual pe GitHub
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run sync
+        env:
+          DISCOGS_USERNAME: ${{ secrets.DISCOGS_USERNAME }}
+          DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node server/index.js

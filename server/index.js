@@ -1,18 +1,12 @@
-// server/index.js
-import express from 'express';
-import cron from 'node-cron';
+import 'dotenv/config';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { readFileSync } from 'fs';
-import 'dotenv/config';
 
 initializeApp({
-  credential: cert(JSON.parse(readFileSync('./serviceAccountKey.json', 'utf8'))),
+  credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
 });
 
 const firestore = getFirestore();
-const app = express();
-
 const cleanName = (name) => name.replace(/\s*\(\d+\)$/, '').trim();
 
 const syncCollection = async () => {
@@ -22,7 +16,7 @@ const syncCollection = async () => {
   try {
     do {
       const res = await fetch(
-        `https://api.discogs.com/users/${process.env.DISCOGS_USERNAME}/collection/folders/0/releases?per_page=500&page=${page}&sort=added`,
+        `https://api.discogs.com/users/${process.env.DISCOGS_USERNAME}/collection/folders/1/releases?per_page=100&page=${page}`,
         {
           headers: {
             Authorization: `Discogs token=${process.env.DISCOGS_TOKEN}`,
@@ -32,6 +26,7 @@ const syncCollection = async () => {
       );
 
       const data = await res.json();
+      console.log('status:', res.status);
       totalPages = data.pagination.pages;
 
       const batch = firestore.batch();
@@ -63,24 +58,11 @@ const syncCollection = async () => {
     } while (page <= totalPages);
 
     console.log(`🎉 Sync complet! ${totalSaved} discuri salvate.`);
+    process.exit(0);
   } catch (err) {
-    console.error('❌ Eroare sync:', err.message);
+    console.error('❌ Eroare:', err.message);
+    process.exit(1);
   }
 };
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
-});
-
-app.post('/sync', async (req, res) => {
-  res.json({ message: 'Sync pornit' });
-  await syncCollection();
-});
-
-// cron: la fiecare 2 zile la ora 03:00
-cron.schedule('0 3 */2 * *', syncCollection);
-
-app.listen(process.env.PORT || 4000, () => {
-  console.log('🎵 Server pornit');
-  syncCollection(); // sync la prima pornire
-});
+syncCollection();
