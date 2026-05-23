@@ -1,14 +1,12 @@
 import 'dotenv/config';
-import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { createClient } from '@supabase/supabase-js';
 
-initializeApp({
-  credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
-});
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY // use service role key for server-side writes
+);
 
-const firestore = getFirestore();
 const cleanName = (name) => name.replace(/\s*\(\d+\)$/, '').trim();
-
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const syncCollection = async () => {
@@ -53,29 +51,35 @@ const syncCollection = async () => {
     const uniqueIds = Object.keys(stockMap);
     console.log(`✅ ${uniqueIds.length} produse unice găsite`);
 
-    // PASUL 2: Procesează în batch-uri de 100
-    console.log('🔄 Pasul 2: Sync Firebase...');
 
-    // Preia toate doc-urile existente dintr-o singură cerere
-    const existingDocs = {};
-    const allRefs = uniqueIds.map(id => firestore.collection('releases').doc(id));
+    console.log('🔄 Pasul 2: Sync Supabase...');
 
-    // Firestore getAll acceptă max 500 doc-uri
-    const chunkSize = 500;
-    for (let i = 0; i < allRefs.length; i += chunkSize) {
-      const chunk = allRefs.slice(i, i + chunkSize);
-      const snaps = await firestore.getAll(...chunk);
-      for (const snap of snaps) {
-        existingDocs[snap.id] = snap.exists ? snap.data() : null;
+    const chunkSize = 100;
+    const existingMap = {};
+
+    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+      const chunk = uniqueIds.slice(i, i + chunkSize);
+      const { data: rows, error } = await supabase
+        .from('products')
+        .select('id, stock')
+        .in('id', chunk);
+
+      if (error) {
+        console.error('❌ Eroare la fetch Supabase:', error.message);
+        process.exit(1);
+      }
+
+      for (const row of rows || []) {
+        existingMap[String(row.id)] = row;
       }
     }
 
-    console.log(`📊 ${Object.values(existingDocs).filter(Boolean).length} produse deja în DB`);
+    console.log(`📊 ${Object.keys(existingMap).length} produse deja în DB`);
 
     for (let i = 0; i < uniqueIds.length; i++) {
       const id = uniqueIds[i];
       const newStock = stockMap[id];
-      const existing = existingDocs[id];
+      const existing = existingMap[id];
 
       try {
         // Dacă există și stocul e același — skip
@@ -86,9 +90,15 @@ const syncCollection = async () => {
 
         // Dacă există și doar stocul s-a schimbat — updatează doar stocul
         if (existing && existing.stock !== newStock) {
-          await firestore.collection('releases').doc(id).update({ stock: newStock });
+          const { error } = await supabase
+            .from('products')
+            .update({ stock: newStock })
+            .eq('id', id);
+
+          if (error) throw error;
+
           totalUpdated++;
-          console.log(`🔄 [${i + 1}/${uniqueIds.length}] Stoc actualizat: "${existing.title}" ${existing.stock} → ${newStock}`);
+          console.log(`🔄 [${i + 1}/${uniqueIds.length}] Stoc actualizat: ID ${id} ${existing.stock} → ${newStock}`);
           await sleep(200);
           continue;
         }
@@ -111,26 +121,42 @@ const syncCollection = async () => {
 
         const detail = await detailRes.json();
         const artistName = detail.artists?.map(a => cleanName(a.name)).join(', ') || '';
+        const coverImage = detail.images?.[0]?.uri || '';
+        const today = new Date().toISOString().split('T')[0];
 
-        await firestore.collection('releases').doc(id).set({
+        const productData = {
           id: Number(id),
           title: detail.title || '',
           title_lowercase: (detail.title || '').toLowerCase(),
           artist: artistName,
           artist_lowercase: artistName.toLowerCase(),
-          year: detail.year || null,
+          year: Number(detail.year) || 0,
           country: detail.country || '',
-          genres: detail.genres || [],
-          styles: detail.styles || [],
-          cover_image: detail.images?.[0]?.uri || '',
-          thumb: detail.images?.[0]?.uri_150 || '',
-          label: detail.labels?.[0]?.name || '',
           format: detail.formats?.[0]?.name || '',
           format_desc: detail.formats?.[0]?.descriptions?.[0] || '',
-          date_added: new Date().toISOString(),
-          stock: newStock,
           price: 0,
-        });
+          stock: newStock,
+          cover_image: coverImage,
+          thumb: detail.images?.[0]?.uri_150 || coverImage,
+          label: detail.labels?.[0]?.name || '',
+          genres: detail.genres || [],
+          styles: detail.styles || [],
+          images: detail.images?.map(img => img.uri) || [],
+          date_added: new Date().toISOString(),
+          stare_coperta: '',
+          stare_disc: '',
+          oferta_activa: false,
+          oferta_procent: '',
+          oferta_data_start: today,
+          oferta_data_end: today,
+          barcode: '',
+        };
+
+        const { error } = await supabase
+          .from('products')
+          .insert(productData);
+
+        if (error) throw error;
 
         totalAdded++;
         console.log(`✅ [${i + 1}/${uniqueIds.length}] Adăugat: "${detail.title}" — stoc: ${newStock}`);
