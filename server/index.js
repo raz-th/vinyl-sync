@@ -6,6 +6,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY // use service role key for server-side writes
 );
 
+const generateId = () => Math.floor(Math.random() * 9_000_000_000) + 1_000_000_000;
+
 const cleanName = (name) => name.replace(/\s*\(\d+\)$/, '').trim();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -125,7 +127,8 @@ const syncCollection = async () => {
         const today = new Date().toISOString().split('T')[0];
 
         const productData = {
-          id: Number(id),
+          id: generateId(),
+          discogsId: Number(id),
           title: detail.title || '',
           title_lowercase: (detail.title || '').toLowerCase(),
           artist: artistName,
